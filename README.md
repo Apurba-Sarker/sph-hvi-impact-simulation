@@ -1,5 +1,5 @@
 # SPH HVI Solver — AOE 5404 Course Project
-**Authors:** Mashaekh Tausif Ehsan, Apurba Sarker  
+**Authors:** Apurba Sarker, Mashaekh Tausif Ehsan  
 **Course:** AOE 5404, Virginia Tech  
 **Date:** April 2026
 
