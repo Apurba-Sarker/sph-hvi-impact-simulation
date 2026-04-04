@@ -2,10 +2,10 @@ import pickle, numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt, matplotlib.gridspec as gridspec
 import os
-os.makedirs('/home/claude/sph_output', exist_ok=True)
+os.makedirs('/home/apurba/sph-hvi-impact-simulation/sph_output', exist_ok=True)
 
-r1 = pickle.load(open('/home/claude/sph_output/AlAl_dx1mm.pkl','rb'))
-r2 = pickle.load(open('/home/claude/sph_output/AlCu_dx1mm.pkl','rb'))
+r1 = pickle.load(open('/home/apurba/sph-hvi-impact-simulation/sph_output/AlAl_dx1mm.pkl','rb'))
+r2 = pickle.load(open('/home/apurba/sph-hvi-impact-simulation/sph_output/AlCu_dx1mm.pkl','rb'))
 
 PAL = ['#E63946','#2196F3']
 
@@ -147,7 +147,7 @@ plot_case(
     'SPH HVI: Al-Al  (1cm Al sphere @ 6.18 km/s on 4mm Al plate, dx=1mm, N=585)',
     exp_crater=3.10, exp_aspect=1.39,
     crater_t=4.0, aspect_t=8.0,
-    fname='/home/claude/sph_output/Fig1_AlAl.png'
+    fname='/home/apurba/sph-hvi-impact-simulation/sph_output/Fig1_AlAl.png'
 )
 
 plot_case(
@@ -155,6 +155,6 @@ plot_case(
     'SPH HVI: Al-Cu  (1cm Al sphere @ 5.75 km/s on 1.5mm Cu plate, dx=1mm, N=322)',
     exp_crater=2.12, exp_aspect=1.39,
     crater_t=2.0, aspect_t=4.0,
-    fname='/home/claude/sph_output/Fig2_AlCu.png'
+    fname='/home/apurba/sph-hvi-impact-simulation/sph_output/Fig2_AlCu.png'
 )
 print('All figures done.')

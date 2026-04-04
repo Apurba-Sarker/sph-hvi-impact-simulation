@@ -368,7 +368,7 @@ CASES = {
 
 # ─── Main runner ─────────────────────────────────────────────────────────
 def run(case="Al-Al", dx_mm=1.0, t_end_us=20.0, snap_us=2.0,
-        outdir="/home/claude/sph_output", verbose=True):
+        outdir="/home/apurba/sph-hvi-impact-simulation/sph_output", verbose=True):
 
     os.makedirs(outdir, exist_ok=True)
     cfg = CASES[case];  dx = dx_mm*1e-3
@@ -450,7 +450,7 @@ def run(case="Al-Al", dx_mm=1.0, t_end_us=20.0, snap_us=2.0,
     return res
 
 # ─── Plotting ────────────────────────────────────────────────────────────
-def plot(res, outdir="/home/claude/sph_output"):
+def plot(res, outdir="/home/apurba/sph-hvi-impact-simulation/sph_output"):
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -535,7 +535,7 @@ def plot(res, outdir="/home/claude/sph_output"):
     return fname
 
 # ─── Convergence study ───────────────────────────────────────────────────
-def convergence_study(case="Al-Al", outdir="/home/claude/sph_output"):
+def convergence_study(case="Al-Al", outdir="/home/apurba/sph-hvi-impact-simulation/sph_output"):
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -571,7 +571,7 @@ if __name__ == "__main__":
     p.add_argument("--dx",     default=1.0,   type=float)
     p.add_argument("--t_end",  default=20.0,  type=float)
     p.add_argument("--snap",   default=2.0,   type=float)
-    p.add_argument("--outdir", default="/home/claude/sph_output")
+    p.add_argument("--outdir", default="/home/apurba/sph-hvi-impact-simulation/sph_output")
     args = p.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
     if args.case == "convergence":
