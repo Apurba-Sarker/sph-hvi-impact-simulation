@@ -324,33 +324,49 @@ def init(dx, R, t_plate, w_plate, v_imp, sph_mat, plt_mat):
 # ─── Output metrics ──────────────────────────────────────────────────────
 def measure(x, rho, mid, mats, t_plate_ref=None):
     """
-    Crater diameter: x-span of plate particles that have exited through the rear
-    face (y < -t_plate/2).  Falls back to a density threshold if nothing exited yet.
-    Debris cloud aspect ratio: bounding box of ALL particles downstream (y < -0.5mm).
+    Crater diameter: x-span of LOW-DENSITY plate particles still near the plate
+    (|y| < 1.5*t_plate) to avoid counting free-flying debris as crater width.
+    Falls back to density threshold if nothing has exited yet.
+
+    Debris cloud aspect ratio: percentile-trimmed bounding box (5th–95th percentile
+    in both x and y) of particles below the plate, to reject outlier particles
+    that fly far and inflate the bounding box.
     """
     plt_mask = mid == 1
+    rho0p    = mats[1]["rho0"]
     crater   = 0.0
 
-    # Primary: plate particles that punched through (y well below original bottom y=0)
-    exited = plt_mask & (x[:,1] < -2e-3)   # >2mm below plate bottom = definitely exited
-    if exited.any():
-        crater = x[exited,0].max() - x[exited,0].min()
+    # Plate thickness estimate from initial config (fallback 4mm)
+    t_plate = 4e-3 if t_plate_ref is None else t_plate_ref
+
+    # Primary: plate particles below the plate bottom (y < 0) but still
+    # within 1.5x plate thickness — these are the rim/ejecta near the crater,
+    # not far-flying debris. Use density < 80% rho0 as damage indicator.
+    near_plate = plt_mask & (x[:,1] < 0) & (x[:,1] > -1.5*t_plate)
+    damaged    = near_plate & (rho < 0.80*rho0p)
+    if damaged.any():
+        crater = x[damaged,0].max() - x[damaged,0].min()
     else:
-        # Secondary: plate particles displaced upward past top face (y > t_plate + gap)
-        # or with strongly reduced density near the impact axis
-        rho0p = mats[1]["rho0"]
-        near_axis = plt_mask & (np.abs(x[:,0]) < 3e-3)   # within 3mm of axis
+        # Fallback: density-depleted particles near the axis (pre-perforation)
+        near_axis = plt_mask & (np.abs(x[:,0]) < 3e-3)
         dam_near  = near_axis & (rho < 0.60*rho0p)
         if dam_near.any():
-            crater = 2.0 * np.abs(x[dam_near, 0]).max()
+            crater = 2.0 * np.abs(x[dam_near,0]).max()
 
-    # Debris cloud: all particles below y = -0.5mm (past exit face)
+    # Debris cloud: particles below y = -0.5mm
+    # Use 5th–95th percentile bounding box to reject lone outliers
     below = x[:,1] < -5e-4
     if below.any():
-        xb     = x[below]
-        length = xb[:,1].max() - xb[:,1].min()
-        width  = xb[:,0].max() - xb[:,0].min()
-        aspect = length / max(width, 1e-9)
+        xb = x[below]
+        if len(xb) >= 10:
+            x_lo, x_hi = np.percentile(xb[:,0], [5, 95])
+            y_lo, y_hi = np.percentile(xb[:,1], [5, 95])
+        else:
+            x_lo, x_hi = xb[:,0].min(), xb[:,0].max()
+            y_lo, y_hi = xb[:,1].min(), xb[:,1].max()
+        length = max(y_hi - y_lo, 1e-9)
+        width  = max(x_hi - x_lo, 1e-9)
+        aspect = length / width
     else:
         aspect = 0.0
 
@@ -401,7 +417,7 @@ def run(case="Al-Al", dx_mm=1.0, t_end_us=20.0, snap_us=2.0,
             _P       = np.zeros(N)
             for k in np.unique(mid):
                 idx=mid==k; _P[idx]=eos_P(rho[idx],e[idx],mats[k])
-            cd, ar = measure(x,rho,mid,mats)
+            cd, ar = measure(x,rho,mid,mats, t_plate_ref=cfg["t_plate"])
             hist["t"].append(t*1e6)
             hist["crater"].append(cd*100); hist["aspect"].append(ar)
             hist["snaps"].append(dict(t=t*1e6, x=x.copy(), v=v.copy(),
@@ -421,7 +437,7 @@ def run(case="Al-Al", dx_mm=1.0, t_end_us=20.0, snap_us=2.0,
         t += dt;  step_n += 1
 
     wall = time.perf_counter()-t0
-    cd, ar = measure(x,rho,mid,mats)
+    cd, ar = measure(x,rho,mid,mats, t_plate_ref=cfg["t_plate"])
     err_c = abs(cd-cfg["exp_crater"])/cfg["exp_crater"]*100
     err_a = abs(ar-cfg["exp_aspect"])/cfg["exp_aspect"]*100 if ar>0 else 999.
     te0   = hist["TE"][0] if hist["TE"] and hist["TE"][0]!=0 else 1e-30
@@ -535,51 +551,139 @@ def plot(res, outdir="/home/apurba/sph-hvi-impact-simulation/sph_output"):
     return fname
 
 # ─── Convergence study ───────────────────────────────────────────────────
-def convergence_study(case="Al-Al", outdir="/home/apurba/sph-hvi-impact-simulation/sph_output"):
+def convergence_study(case="Al-Al", outdir="sph_output"):
+    """
+    O4: Particle-spacing convergence study at dx = 1.0, 0.75, 0.5 mm.
+
+    Metrics are evaluated at a FIXED early snapshot time (eval_us) — the
+    physically meaningful window before free debris scatters and inflates
+    the bounding-box measurements.  For Al-Al: t=4µs; for Al-Cu: t=2µs.
+    These match the evaluation times used in make_plots.py.
+    """
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    spacings=[1.0, 0.75, 0.5]; craters=[]; aspects=[]
-    for dx in spacings:
-        print(f"\n>>> Convergence {case} dx={dx}mm")
-        res = run(case=case, dx_mm=dx, outdir=outdir, verbose=True)
-        craters.append(res["crater_cm"]); aspects.append(res["aspect"])
+    eval_us = {"Al-Al": 6.0, "Al-Cu": 2.0}[case]
+    spacings = [1.0, 0.75, 0.5]
+    craters  = []   # crater diameter (cm) at eval_us
+    aspects  = []   # debris l/w at eval_us
+    Ns       = []   # particle counts
+    walls    = []   # wall-clock times
 
-    cfg = CASES[case]; dx_arr=np.array(spacings)
-    fig,(a1,a2)=plt.subplots(1,2,figsize=(12,5))
-    fig.suptitle(f"Convergence — {case}", fontsize=13, fontweight="bold")
-    a1.loglog(dx_arr, np.maximum(craters,1e-3), "bo-", ms=8, lw=2, label="SPH")
-    a1.axhline(cfg["exp_crater"]*100, color="r", ls="--", lw=2, label="Exp")
-    if min(craters)>0:
-        p=np.polyfit(np.log(dx_arr),np.log(craters),1)
-        a1.set_title(f"Crater  (order≈{p[0]:.2f})")
-    a1.set_xlabel("Δx (mm)"); a1.set_ylabel("Crater (cm)"); a1.legend(); a1.grid(which="both",alpha=0.3)
-    a2.loglog(dx_arr, np.maximum(aspects,1e-3), "gs-", ms=8, lw=2, label="SPH")
-    a2.axhline(cfg["exp_aspect"], color="r", ls="--", lw=2, label="Exp")
-    a2.set_xlabel("Δx (mm)"); a2.set_ylabel("l/w"); a2.set_title("Debris aspect"); a2.legend(); a2.grid(which="both",alpha=0.3)
+    cfg = CASES[case]
+
+    for dx in spacings:
+        print(f"\n>>> Convergence {case}  dx={dx}mm")
+        # Run only to eval_us + a little margin (saves time vs full 20µs)
+        t_end = eval_us + 2.0
+        res = run(case=case, dx_mm=dx, t_end_us=t_end, snap_us=0.5,
+                  outdir=outdir, verbose=True)
+        Ns.append(res["N"])
+        walls.append(res["wall_s"])
+
+        # Find snapshot closest to eval_us
+        hist   = res["history"]
+        t_arr  = np.array(hist["t"])
+        idx    = int(np.argmin(np.abs(t_arr - eval_us)))
+        craters.append(hist["crater"][idx])
+        aspects.append(hist["aspect"][idx])
+        print(f"  @ t={t_arr[idx]:.1f}µs  crater={hist['crater'][idx]:.3f}cm"
+              f"  l/w={hist['aspect'][idx]:.3f}")
+
+    dx_arr = np.array(spacings)
+
+    # ── convergence plot ────────────────────────────────────────────────
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig.suptitle(f"O4 Convergence Study — {case}  (metrics at t={eval_us:.0f}µs)",
+                 fontsize=13, fontweight="bold")
+
+    # Crater diameter
+    ax = axes[0]
+    ax.plot(dx_arr, craters, "bo-", ms=8, lw=2, label="SPH")
+    ax.axhline(cfg["exp_crater"]*100, color="r", ls="--", lw=2,
+               label=f"Exp {cfg['exp_crater']*100:.2f} cm")
+    # empirical order on log-log
+    if all(c > 0 for c in craters):
+        p = np.polyfit(np.log(dx_arr), np.log(craters), 1)
+        order_str = f"order ≈ {p[0]:.2f}"
+        # overlay fit line
+        dx_fit = np.linspace(dx_arr.min()*0.9, dx_arr.max()*1.1, 50)
+        ax.plot(dx_fit, np.exp(np.polyval(p, np.log(dx_fit))),
+                "b--", lw=1, alpha=0.5, label=order_str)
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel("Δx (mm)"); ax.set_ylabel("Crater diameter (cm)")
+    ax.set_title(f"Crater diameter\n({order_str if all(c>0 for c in craters) else 'N/A'})")
+    ax.legend(fontsize=8); ax.grid(which="both", alpha=0.3)
+
+    # Debris aspect ratio
+    ax = axes[1]
+    valid_a = [a for a in aspects if a > 0.01]
+    valid_dx = [dx_arr[i] for i,a in enumerate(aspects) if a > 0.01]
+    if valid_a:
+        ax.plot(valid_dx, valid_a, "gs-", ms=8, lw=2, label="SPH")
+        ax.axhline(cfg["exp_aspect"], color="r", ls="--", lw=2,
+                   label=f"Exp {cfg['exp_aspect']:.2f}")
+        if len(valid_a) >= 2:
+            p2 = np.polyfit(np.log(valid_dx), np.log(valid_a), 1)
+            dx_fit = np.linspace(min(valid_dx)*0.9, max(valid_dx)*1.1, 50)
+            ax.plot(dx_fit, np.exp(np.polyval(p2, np.log(dx_fit))),
+                    "g--", lw=1, alpha=0.5, label=f"order ≈ {p2[0]:.2f}")
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel("Δx (mm)"); ax.set_ylabel("Debris l/w")
+    ax.set_title("Debris aspect ratio"); ax.legend(fontsize=8); ax.grid(which="both", alpha=0.3)
+
+    # Wall time vs N
+    ax = axes[2]
+    ax.plot(Ns, walls, "rs-", ms=8, lw=2)
+    for n, w, dx in zip(Ns, walls, spacings):
+        ax.annotate(f"dx={dx}mm\n{w:.0f}s", xy=(n, w),
+                    xytext=(n*1.03, w*1.05), fontsize=8)
+    if len(Ns) >= 2:
+        p3 = np.polyfit(np.log(Ns), np.log(walls), 1)
+        ax.set_title(f"Wall time vs N  (slope ≈ {p3[0]:.2f})")
+    else:
+        ax.set_title("Wall time vs N")
+    ax.set_xscale("log"); ax.set_yscale("log")
+    ax.set_xlabel("N particles"); ax.set_ylabel("Wall time (s)")
+    ax.grid(which="both", alpha=0.3)
+
     plt.tight_layout()
-    fname=os.path.join(outdir,f"convergence_{case.replace('-','_')}.png")
-    plt.savefig(fname,dpi=150); plt.close()
-    print(f"  Convergence plot → {fname}")
-    return craters, aspects, spacings
+    fname = os.path.join(outdir, f"convergence_{case.replace('-','_')}.png")
+    plt.savefig(fname, dpi=150, bbox_inches="tight"); plt.close()
+    print(f"\n  Convergence plot → {fname}")
+
+    # summary table to stdout
+    print(f"\n  {'dx':>6}  {'N':>6}  {'crater(cm)':>12}  {'l/w':>8}  {'wall(s)':>8}")
+    for dx, n, c, a, w in zip(spacings, Ns, craters, aspects, walls):
+        print(f"  {dx:>6.2f}  {n:>6}  {c:>12.3f}  {a:>8.3f}  {w:>8.1f}")
+
+    return dict(spacings=spacings, Ns=Ns, craters=craters,
+                aspects=aspects, walls=walls, eval_us=eval_us)
 
 # ─── CLI ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
-    p.add_argument("--case",   default="Al-Al", choices=["Al-Al","Al-Cu","both","convergence"])
+    p.add_argument("--case",   default="Al-Al",
+                   choices=["Al-Al","Al-Cu","both","convergence-AlAl","convergence-AlCu","convergence-both"])
     p.add_argument("--dx",     default=1.0,   type=float)
     p.add_argument("--t_end",  default=20.0,  type=float)
     p.add_argument("--snap",   default=2.0,   type=float)
-    p.add_argument("--outdir", default="/home/apurba/sph-hvi-impact-simulation/sph_output")
+    p.add_argument("--outdir", default="sph_output")
     args = p.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
-    if args.case == "convergence":
+
+    if args.case == "convergence-AlAl":
         convergence_study("Al-Al", args.outdir)
+    elif args.case == "convergence-AlCu":
+        convergence_study("Al-Cu", args.outdir)
+    elif args.case == "convergence-both":
+        convergence_study("Al-Al", args.outdir)
+        convergence_study("Al-Cu", args.outdir)
     elif args.case == "both":
         for c in ["Al-Al","Al-Cu"]:
-            res=run(c,args.dx,args.t_end,args.snap,args.outdir)
-            plot(res,args.outdir)
+            res = run(c, args.dx, args.t_end, args.snap, args.outdir)
+            plot(res, args.outdir)
     else:
-        res=run(args.case,args.dx,args.t_end,args.snap,args.outdir)
-        plot(res,args.outdir)
+        res = run(args.case, args.dx, args.t_end, args.snap, args.outdir)
+        plot(res, args.outdir)

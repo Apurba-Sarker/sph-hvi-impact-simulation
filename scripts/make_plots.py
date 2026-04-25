@@ -1,11 +1,27 @@
+"""
+make_plots.py  —  Publication-quality figures for SPH HVI results.
+Loads pre-computed .pkl files from sph_output/ and generates figures.
+
+Evaluation times (where metrics are read off):
+  Al-Al: crater @ t=4µs,  debris l/w @ t=8µs
+  Al-Cu: crater @ t=2µs,  debris l/w @ t=4µs
+
+These are the physically meaningful windows before free debris scatters
+and inflates the bounding-box measurements. The aspect ratio uses the
+percentile-trimmed measure() in sph_hvi.py (5th-95th pct), which
+rejects lone outlier particles from the thin Cu plate.
+"""
+
 import pickle, numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt, matplotlib.gridspec as gridspec
 import os
-os.makedirs('/home/apurba/sph-hvi-impact-simulation/sph_output', exist_ok=True)
 
-r1 = pickle.load(open('/home/apurba/sph-hvi-impact-simulation/sph_output/AlAl_dx1mm.pkl','rb'))
-r2 = pickle.load(open('/home/apurba/sph-hvi-impact-simulation/sph_output/AlCu_dx1mm.pkl','rb'))
+OUTDIR = 'sph_output'
+os.makedirs(OUTDIR, exist_ok=True)
+
+r1 = pickle.load(open(os.path.join(OUTDIR, 'AlAl_dx1mm.pkl'), 'rb'))
+r2 = pickle.load(open(os.path.join(OUTDIR, 'AlCu_dx1mm.pkl'), 'rb'))
 
 PAL = ['#E63946','#2196F3']
 
@@ -72,8 +88,8 @@ def plot_case(res, title_str, exp_crater, exp_aspect, crater_t, aspect_t, fname)
                     xytext=(aspect_t + 3, best_a + 0.05),
                     arrowprops=dict(arrowstyle='->', color='purple'),
                     fontsize=8, color='purple')
-    ax.set_xlabel('t (µs)'); ax.set_ylabel('Aspect ratio l/w')
-    ax.set_title('Debris cloud shape'); ax.legend(fontsize=7); ax.grid(alpha=0.3)
+    ax.set_title('Debris cloud shape\n(5th-95th pct bounding box)')
+    ax.legend(fontsize=7); ax.grid(alpha=0.3)
 
     # ── Energy history ─────────────────────────────────────────────────
     ax = fig.add_subplot(gs[1, 2])
@@ -147,7 +163,7 @@ plot_case(
     'SPH HVI: Al-Al  (1cm Al sphere @ 6.18 km/s on 4mm Al plate, dx=1mm, N=585)',
     exp_crater=3.10, exp_aspect=1.39,
     crater_t=4.0, aspect_t=8.0,
-    fname='/home/apurba/sph-hvi-impact-simulation/sph_output/Fig1_AlAl.png'
+    fname=os.path.join(OUTDIR, 'Fig1_AlAl.png')
 )
 
 plot_case(
@@ -155,6 +171,6 @@ plot_case(
     'SPH HVI: Al-Cu  (1cm Al sphere @ 5.75 km/s on 1.5mm Cu plate, dx=1mm, N=322)',
     exp_crater=2.12, exp_aspect=1.39,
     crater_t=2.0, aspect_t=4.0,
-    fname='/home/apurba/sph-hvi-impact-simulation/sph_output/Fig2_AlCu.png'
+    fname=os.path.join(OUTDIR, 'Fig2_AlCu.png')
 )
 print('All figures done.')
